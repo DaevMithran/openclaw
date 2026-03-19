@@ -22,6 +22,7 @@ export const theme = {
   heading: baseChalk.bold.hex(LOBSTER_PALETTE.accent),
   command: hex(LOBSTER_PALETTE.accentBright),
   option: hex(LOBSTER_PALETTE.warn),
+  bold: (text: string) => chalk.bold(text),
 } as const;
 
 export const isRich = () => Boolean(baseChalk.level > 0);

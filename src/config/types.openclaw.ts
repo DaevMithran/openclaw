@@ -1,3 +1,4 @@
+import type { ServicesConfig } from "../agents/services/types.js";
 import type { AcpConfig } from "./types.acp.js";
 import type { AgentBinding, AgentsConfig } from "./types.agents.js";
 import type { ApprovalsConfig } from "./types.approvals.js";
@@ -94,6 +95,7 @@ export type OpenClawConfig = {
   };
   secrets?: SecretsConfig;
   skills?: SkillsConfig;
+  services?: ServicesConfig;
   plugins?: PluginsConfig;
   models?: ModelsConfig;
   nodeHost?: NodeHostConfig;

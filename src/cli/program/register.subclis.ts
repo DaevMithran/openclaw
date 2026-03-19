@@ -285,6 +285,15 @@ const entries: SubCliEntry[] = [
     },
   },
   {
+    name: "services",
+    description: "Manage remote services (install, list, inspect, uninstall)",
+    hasSubcommands: true,
+    register: async (program) => {
+      const mod = await import("../services-cli.js");
+      mod.registerServicesCli(program);
+    },
+  },
+  {
     name: "skills",
     description: "List and inspect available skills",
     hasSubcommands: true,

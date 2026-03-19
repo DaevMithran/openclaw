@@ -9,7 +9,9 @@ import { createServer as createHttpsServer } from "node:https";
 import type { TlsOptions } from "node:tls";
 import { handleSlackHttpRequest } from "openclaw/plugin-sdk/slack";
 import type { WebSocketServer } from "ws";
+import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { resolveAgentAvatar } from "../agents/identity-avatar.js";
+import { handleServiceMetadataRequest } from "../agents/services/well-known-handler.js";
 import { CANVAS_WS_PATH, handleA2uiHttpRequest } from "../canvas-host/a2ui.js";
 import type { CanvasHostHandler } from "../canvas-host/server.js";
 import { loadConfig } from "../config/config.js";
@@ -886,6 +888,19 @@ export function createGatewayHttpServer(opts: {
           run: () => canvasHost.handleHttpRequest(req, res),
         });
       }
+      // Serve SERVICE.md and skill files for service discovery.
+      // Runs before plugin routes so the well-known path is always reachable.
+      requestStages.push({
+        name: "service-metadata",
+        run: () => {
+          const workspaceDir = resolveAgentWorkspaceDir(
+            configSnapshot,
+            resolveDefaultAgentId(configSnapshot),
+          );
+          return handleServiceMetadataRequest(req, res, { workspaceDir });
+        },
+      });
+
       // Plugin routes run before the Control UI SPA catch-all so explicitly
       // registered plugin endpoints stay reachable. Core built-in gateway
       // routes above still keep precedence on overlapping paths.

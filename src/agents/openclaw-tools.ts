@@ -4,6 +4,8 @@ import { getActiveRuntimeWebToolsMetadata } from "../secrets/runtime.js";
 import type { GatewayMessageChannel } from "../utils/message-channel.js";
 import { resolveSessionAgentId } from "./agent-scope.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
+import { createServiceTools } from "./services/tool.js";
+import { loadEligibleServiceEntries } from "./services/workspace.js";
 import type { SpawnedToolContext } from "./spawned-context.js";
 import type { ToolFsPolicy } from "./tool-fs-policy.js";
 import { createAgentsListTool } from "./tools/agents-list-tool.js";
@@ -227,6 +229,16 @@ export function createOpenClawTools(
     ...(imageTool ? [imageTool] : []),
     ...(pdfTool ? [pdfTool] : []),
   ];
+
+  // Load and register service tools
+  const serviceEntries = loadEligibleServiceEntries(workspaceDir, {
+    config: options?.config,
+  });
+  const serviceTools = createServiceTools(serviceEntries, {
+    config: options?.config,
+    agentSessionKey: options?.agentSessionKey,
+  });
+  tools.push(...serviceTools);
 
   const pluginTools = resolvePluginTools({
     context: {
