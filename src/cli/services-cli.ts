@@ -4,6 +4,8 @@ import { installService, uninstallService } from "../agents/services/install.js"
 import type { ServiceEntry } from "../agents/services/types.js";
 import { loadServiceEntries, loadEligibleServiceEntries } from "../agents/services/workspace.js";
 import { loadConfig } from "../config/config.js";
+import { resolveGatewayPort } from "../config/paths.js";
+import { pickPrimaryLanIPv4 } from "../gateway/net.js";
 import { defaultRuntime } from "../runtime.js";
 import { theme } from "../terminal/theme.js";
 
@@ -33,7 +35,7 @@ function formatServiceList(
   }
 
   if (entries.length === 0) {
-    return `${theme.muted("No services installed.")}\n\nInstall a service with: ${theme.accent("openclaw services install <url>")}`;
+    return `${theme.muted("No services installed.")}\n\nInstall a service with: ${theme.accent("openclaw services install <url>")}, to provide your openclaw as a service: ${theme.accent("openclaw services init")}`;
   }
 
   const lines: string[] = [];
@@ -227,7 +229,7 @@ export function registerServicesCli(program: Command) {
         const config = loadConfig();
         const workspaceDir = resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config));
 
-        const { resolveAvailableSkills, generateServiceMd, writeServiceMd } =
+        const { resolveAvailableSkills, writeServiceMd } =
           await import("../agents/services/init.js");
         const { createClackPrompter } = await import("../wizard/clack-prompter.js");
 
@@ -261,11 +263,17 @@ export function registerServicesCli(program: Command) {
           }));
 
         // 3. URL
+        const detectedIp = pickPrimaryLanIPv4();
+        const detectedPort = resolveGatewayPort(config);
+        const defaultUrl = detectedIp
+          ? `http://${detectedIp}:${detectedPort}/v1/invoke`
+          : undefined;
         const url =
           opts.url ??
           (await prompter.text({
             message: "Service invoke URL (your gateway's public URL + /v1/invoke)",
             placeholder: "https://your-host.example.com/v1/invoke",
+            initialValue: defaultUrl,
           }));
 
         // 4. Skills selection
@@ -310,20 +318,17 @@ export function registerServicesCli(program: Command) {
         }
 
         // Generate and write
-        const content = generateServiceMd({
-          name,
-          description,
-          url: url || undefined,
-          trust,
-          confirm,
-          pricingNote,
-          selectedSkills,
-        });
-
         const result = writeServiceMd({
           workspaceDir,
-          content,
-          selectedSkills,
+          serviceParams: {
+            name,
+            description,
+            url: url || undefined,
+            trust,
+            confirm,
+            pricingNote,
+            selectedSkills,
+          },
           config,
         });
 
@@ -331,10 +336,14 @@ export function registerServicesCli(program: Command) {
           result.copiedSkills.length > 0
             ? `\n  ${theme.muted("Skills copied:")} ${result.copiedSkills.join(", ")}`
             : "";
+        const removedNote =
+          result.removedSkills.length > 0
+            ? `\n  ${theme.muted("Removed ineligible:")} ${result.removedSkills.join(", ")}`
+            : "";
         const serveNote = `\n  ${theme.muted("Served at:")} /.well-known/service.md (when gateway is running)`;
 
         await prompter.outro(
-          `${theme.accent("✓")} SERVICE.md created at ${result.filePath}${skillNote}${serveNote}`,
+          `${theme.accent("✓")} SERVICE.md created at ${result.filePath}${skillNote}${removedNote}${serveNote}`,
         );
       } catch (err) {
         if (err instanceof Error && err.name === "WizardCancelledError") {

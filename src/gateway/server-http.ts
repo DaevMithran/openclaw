@@ -897,7 +897,7 @@ export function createGatewayHttpServer(opts: {
             configSnapshot,
             resolveDefaultAgentId(configSnapshot),
           );
-          return handleServiceMetadataRequest(req, res, { workspaceDir });
+          return handleServiceMetadataRequest(req, res, { workspaceDir, config: configSnapshot });
         },
       });
 

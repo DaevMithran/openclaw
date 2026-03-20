@@ -1,28 +1,22 @@
 import fs from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
+import type { OpenClawConfig } from "../../config/config.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { filterWorkspaceSkillEntries, loadWorkspaceSkillEntries } from "../skills/workspace.js";
+import { buildServiceMdContent, parseSelectedSkills, parseServiceMd } from "./init.js";
 
 const servicesLogger = createSubsystemLogger("services");
 
 const WELL_KNOWN_SERVICE_PATH = "/.well-known/service.md";
 const SKILLS_PATH_PREFIX = "/skills/";
 
-/**
- * Handle HTTP requests for the well-known SERVICE.md endpoint
- * and skill file serving.
- *
- * Serves:
- * - GET /.well-known/service.md → workspace SERVICE.md
- * - GET /skills/<name>/SKILL.md → workspace service-skills/<name>/SKILL.md
- *
- * Returns true if the request was handled, false otherwise.
- */
 export function handleServiceMetadataRequest(
   req: IncomingMessage,
   res: ServerResponse,
   opts: {
     workspaceDir: string;
+    config?: OpenClawConfig;
   },
 ): boolean {
   if (req.method !== "GET" && req.method !== "HEAD") {
@@ -31,20 +25,22 @@ export function handleServiceMetadataRequest(
 
   const urlPath = req.url?.split("?")[0] ?? "";
 
-  // Serve SERVICE.md at well-known path
   if (urlPath === WELL_KNOWN_SERVICE_PATH) {
-    return serveServiceMd(res, opts.workspaceDir);
+    return serveServiceMd(res, opts.workspaceDir, opts.config);
   }
 
-  // Serve skill files at /skills/<name>/SKILL.md
   if (urlPath.startsWith(SKILLS_PATH_PREFIX) && urlPath.endsWith("/SKILL.md")) {
-    return serveSkillMd(res, urlPath, opts.workspaceDir);
+    return serveSkillMd(res, urlPath, opts.workspaceDir, opts.config);
   }
 
   return false;
 }
 
-function serveServiceMd(res: ServerResponse, workspaceDir: string): boolean {
+function serveServiceMd(
+  res: ServerResponse,
+  workspaceDir: string,
+  config?: OpenClawConfig,
+): boolean {
   const serviceMdPath = path.join(workspaceDir, "SERVICE.md");
 
   if (!fs.existsSync(serviceMdPath)) {
@@ -54,25 +50,86 @@ function serveServiceMd(res: ServerResponse, workspaceDir: string): boolean {
     return true;
   }
 
+  let rawContent: string;
   try {
-    const content = fs.readFileSync(serviceMdPath, "utf-8");
-    res.statusCode = 200;
-    res.setHeader("Content-Type", "text/markdown; charset=utf-8");
-    res.setHeader("Cache-Control", "no-cache");
-    res.end(content);
-    return true;
+    rawContent = fs.readFileSync(serviceMdPath, "utf-8");
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    servicesLogger.warn("Failed to serve SERVICE.md.", { error: message });
+    servicesLogger.warn("Failed to read SERVICE.md.", {
+      error: error instanceof Error ? error.message : String(error),
+    });
     res.statusCode = 500;
     res.setHeader("Content-Type", "text/plain; charset=utf-8");
     res.end("Internal Server Error");
     return true;
   }
+
+  const parsed = parseServiceMd(rawContent);
+  const selectedSkills = parseSelectedSkills(rawContent);
+
+  const { eligibleSet } = resolveEligibleSkills(workspaceDir, config);
+  const eligibleSkillNames = selectedSkills.filter((n) => eligibleSet.has(n));
+
+  cleanOrphanedSkillDirs(workspaceDir, eligibleSet);
+
+  let content = rawContent;
+  if (eligibleSkillNames.length !== selectedSkills.length) {
+    content = buildServiceMdContent({
+      name: parsed.name,
+      description: parsed.description,
+      url: parsed.url,
+      trust: parsed.trust as "external" | "internal" | undefined,
+      confirm: parsed.confirm as "auto" | "always" | "never" | undefined,
+      pricingNote: parsed.pricingNote,
+      selectedSkills: eligibleSkillNames,
+      body: parsed.body,
+    });
+  }
+
+  res.statusCode = 200;
+  res.setHeader("Content-Type", "text/markdown; charset=utf-8");
+  res.setHeader("Cache-Control", "no-cache");
+  res.end(content);
+  return true;
 }
 
-function serveSkillMd(res: ServerResponse, urlPath: string, workspaceDir: string): boolean {
-  // Extract skill name from /skills/<name>/SKILL.md
+function resolveEligibleSkills(workspaceDir: string, config?: OpenClawConfig) {
+  const entries = loadWorkspaceSkillEntries(workspaceDir, { config });
+  const eligible = filterWorkspaceSkillEntries(entries, config);
+  const eligibleSet = new Set<string>(eligible.map((e) => e.skill.name));
+  return { eligible, eligibleSet };
+}
+
+function cleanOrphanedSkillDirs(workspaceDir: string, eligibleSkills: Set<string>): void {
+  const serviceSkillsDir = path.join(workspaceDir, "service-skills");
+  if (!fs.existsSync(serviceSkillsDir)) {
+    return;
+  }
+
+  try {
+    const entries = fs.readdirSync(serviceSkillsDir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isDirectory()) {
+        continue;
+      }
+      if (!eligibleSkills.has(entry.name)) {
+        try {
+          fs.rmSync(path.join(serviceSkillsDir, entry.name), { recursive: true, force: true });
+        } catch {
+          // ignore cleanup failures
+        }
+      }
+    }
+  } catch {
+    // ignore directory scan failures
+  }
+}
+
+function serveSkillMd(
+  res: ServerResponse,
+  urlPath: string,
+  workspaceDir: string,
+  config?: OpenClawConfig,
+): boolean {
   const stripped = urlPath.slice(SKILLS_PATH_PREFIX.length);
   const slashIndex = stripped.indexOf("/");
   if (slashIndex === -1) {
@@ -81,7 +138,6 @@ function serveSkillMd(res: ServerResponse, urlPath: string, workspaceDir: string
 
   const skillName = stripped.slice(0, slashIndex);
 
-  // Validate skill name to prevent path traversal
   if (
     !skillName ||
     skillName.includes("..") ||
@@ -91,6 +147,15 @@ function serveSkillMd(res: ServerResponse, urlPath: string, workspaceDir: string
     res.statusCode = 400;
     res.setHeader("Content-Type", "text/plain; charset=utf-8");
     res.end("Invalid skill name.");
+    return true;
+  }
+
+  const { eligibleSet } = resolveEligibleSkills(workspaceDir, config);
+
+  if (!eligibleSet.has(skillName)) {
+    res.statusCode = 404;
+    res.setHeader("Content-Type", "text/plain; charset=utf-8");
+    res.end(`Skill "${skillName}" is not available or not eligible.`);
     return true;
   }
 
@@ -111,8 +176,10 @@ function serveSkillMd(res: ServerResponse, urlPath: string, workspaceDir: string
     res.end(content);
     return true;
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    servicesLogger.warn("Failed to serve SKILL.md.", { skill: skillName, error: message });
+    servicesLogger.warn("Failed to serve SKILL.md.", {
+      skill: skillName,
+      error: error instanceof Error ? error.message : String(error),
+    });
     res.statusCode = 500;
     res.setHeader("Content-Type", "text/plain; charset=utf-8");
     res.end("Internal Server Error");
