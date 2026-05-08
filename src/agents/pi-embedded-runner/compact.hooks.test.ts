@@ -1076,17 +1076,25 @@ describe("compactEmbeddedPiSession hooks (ownsCompaction engine)", () => {
         }),
       }),
     );
-    const runtimeContext = contextEngineCompactMock.mock.calls[0]?.[0]?.runtimeContext as {
-      llm?: {
-        complete?: (params: {
-          messages: Array<{ role: "user"; content: string }>;
-          agentId?: string;
-        }) => Promise<unknown>;
-      };
-    };
+    const contextEngineCompactCalls = contextEngineCompactMock.mock.calls as unknown as Array<
+      [
+        {
+          runtimeContext?: {
+            llm?: {
+              complete?: (params: {
+                messages: Array<{ role: "user"; content: string }>;
+                agentId?: string;
+              }) => Promise<unknown>;
+            };
+          };
+        },
+      ]
+    >;
+    const runtimeContext = contextEngineCompactCalls[0]?.[0]?.runtimeContext;
+    expect(runtimeContext).toBeDefined();
 
     await expect(
-      runtimeContext.llm?.complete?.({
+      runtimeContext?.llm?.complete?.({
         messages: [{ role: "user", content: "summarize" }],
         agentId: "other-agent",
       }),
